@@ -8,7 +8,9 @@ This repository contains instructions to set up Fedora 43 Workstation for develo
 
 Proceed at your own risk and verify each command before executing that command. If you're unsure what something does, use a search engine or generative AI to ask what the command is doing. 
 
-## Check Fedora Version
+## Update the OS and firmware
+
+### 1) Check Fedora Version
 
 Let's make sure we're on Fedora 43, which is the version of Fedora this setup guide is written for:
 
@@ -18,37 +20,68 @@ cat /etc/fedora-release
 
 The terminal output should display `Fedora release 43 (Forty Three)`.
 
-Stop if you get something other than Fedora 43. In that case, this guide may be out-of-date and providing inaccurate information for the version you're using.
+> 🚨 Stop if you see output that isn't "Fedora release 43" to avoid following inaccurate instructions.
 
-## Update the OS and install common tools
+### 2) Apply updates
 
-Update Fedora:
-
-```bash
-sudo dnf upgrade
-```
-
-Reboot the system once that completes.
-
-Check for device firmware updates and install those updates by running the following commands:
+Run:
 
 ```bash
-fwupdmgr refresh --force
-fwupdmgr get-updates
-fwupdmgr update
+sudo dnf upgrade -y --offline
 ```
 
-Let's next install some common development tools:
+Then:
 
 ```bash
-sudo dnf -y install make
+sudo dnf offline reboot
 ```
 
-## Optional: Install COSMIC Desktop Environment
+> ⚠️ Running `sudo dnf offline reboot` will restart the system.
 
-Run the subsequent commands if you want the option of using System76's COSMIC desktop environment instead of only having the option of Gnome. 
+The advantage to adding the `--offline` flag to the standard `sudo dnf upgrade -y` command is system stability and consistency during the update process. Using `--offline` prevents session crashes during live updates that can interrupt `dnf` and leave the system in a broken state.
 
-This code block will reboot your system.
+
+### 3) Update device firmware
+
+Next, let's check for device firmware updates and install them. Firmware matters for WiFi/Bluetooth performance and battery life. Chances are, your computer has some firmware updates available. Run these commands:
+
+```bash
+# See what devices can be updated
+sudo fwupdmgr get-devices
+
+# Refresh the firmware database
+sudo fwupdmgr refresh --force
+
+# Check for firmware updates
+sudo fwupdmgr get-updates
+
+# Apply firmware updates
+sudo fwupdmgr update
+```
+
+> ⚠️ Reboot the system if updates were applied: `sudo reboot`
+
+## Install common command-line tools
+
+Let's next install some common and useful development tools:
+
+```bash
+sudo dnf -y install make curl git
+```
+
+## Add Flathub
+
+```bash
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
+
+> See https://flathub.org/en/setup/Fedora.
+
+## Install the COSMIC Desktop Environment
+
+Run the subsequent commands if you want the option of using System76's COSMIC desktop environment. COSMIC is shown in the screenshot at the beginning of this README. 
+
+> ⚠️ Running this code block will reboot your system.
 
 ```bash
 sudo dnf upgrade --refresh
@@ -58,17 +91,194 @@ sudo reboot
 
 Use the gear icon when logging in to switch to COSMIC.
 
+## Force all Flatpak apps to use Wayland
+
+Let's remove a potential attack surface by restricting Flatpak-based apps from using X11:
+
+```bash
+# Restrict X11 on all Flatpak apps for the current user
+flatpak override --user --nosocket=x11
+
+# Enable Wayland on all Flatpak apps for the current user
+flatpak override --user --socket=wayland
+
+# Tell Electron apps to prefer Wayland over XWayland fallback
+flatpak override --user --env=ELECTRON_OZONE_PLATFORM_HINT=wayland
+```
+
+Global overrides can be inspected via:
+
+```bash
+flatpak override --user --show
+```
+
+Note that some older apps may outright fail without X11. X11 can be re-enabled for a specific app by running `flatpak override --user --socket=x11 com.example.App`.
+
+## Restrict Flatpak apps from sensitive directories
+
+Let's restrict all Flatpak apps from accessing sensitive locations in `$HOME` by default. You can always grant permissions to specific apps on an app-by-app basis later.
+
+```bash
+flatpak override --user \
+  --nofilesystem=~/secure-credentials \
+  --nofilesystem=~/.ssh \
+  --nofilesystem=~/.aws \
+  --nofilesystem=~/.config/gcloud \
+  --nofilesystem=~/.azure \
+  --nofilesystem=~/.gnupg \
+  --nofilesystem=~/.npm \
+  --nofilesystem=~/.nuget \
+  --nofilesystem=~/.pypirc \
+  --nofilesystem=~/.cargo \
+  --nofilesystem=~/.gradle \
+  --nofilesystem=~/.kube \
+  --nofilesystem=~/.docker \
+  --nofilesystem=~/.terraform.d \
+  --nofilesystem=~/.config/gh \
+  --nofilesystem=~/.config/git
+```
+
+These global overrides can be inspected by running:
+
+```bash
+flatpak override --user --show
+```
+
+## Install a password manager (KeePassXC)
+
+We'll skip BitWarden install since that's client-server architecture and focus on something that's 100% local for the purposes of this guide.
+
+```bash
+flatpak install flathub org.keepassxc.KeePassXC
+```
+
+
+<details>
+  <summary><b>Click to expand:</b> 🛡 KeePassXC post-installation security-hardening guide</summary>
+&nbsp;
+
+Let's create a special folder for the KeePass vault:
+
+```bash
+mkdir -p ~/Documents/KeePassVault
+chmod 700 ~/Documents/KeePassVault
+```
+
+This is where the `.kdbx` file will go.
+
+Next, set Flatpak overrides:
+
+```bash
+# Restrict KeePass to just the special vault folder:
+flatpak override --user org.keepassxc.KeePassXC \
+  --nofilesystem=host \
+  --nofilesystem=home \
+  --filesystem=xdg-documents/KeePassVault:rw
+
+# Block KeePass from using the network:
+flatpak override --user org.keepassxc.KeePassXC --unshare=network
+
+# Block X11. However, this breaks auto-type, so beware.
+flatpak override --user org.keepassxc.KeePassXC \
+  --socket=wayland \
+  --nosocket=x11
+
+# Block SSH, unless you use KeePass for this
+flatpak override --user --nosocket=ssh-auth org.keepassxc.KeePassXC
+flatpak override --user org.keepassxc.KeePassXC --unset-env=SSH_AUTH_SOCK
+```
+
+To show overrides:
+
+```bash
+flatpak override --user --show org.keepassxc.KeePassXC
+```
+
+KeePassXC now:
+
+- ❌ Cannot access Internet
+- ❌ Cannot access SSH agent
+- ❌ Cannot access ~/.ssh
+- ❌ Cannot read your AWS creds
+- ❌ Cannot read GitHub tokens
+- ❌ Cannot scan your home directory
+- ❌ Cannot auto-type into other apps
+- ✔ Can open only your vault folder
+- ✔ Can copy passwords to clipboard
+- ✔ Can run under Wayland
+
+In case anything goes wrong, you can reset all overrides for KeePass to start over on overrides:
+
+```bash
+flatpak override --user --reset org.keepassxc.KeePassXC
+```
+
+</details>
+
 ## Install Gnome Tweaks
 
-Install Gnome Tweaks:
+Want minimize and maximize buttons on your windows when using Gnome? You need Gnome Tweaks.
+
 
 ```bash
 sudo dnf -y install gnome-tweaks
 ```
 
-Gnome Tweaks will let you add minimize and maximize buttons to windows, change fonts, modify font rendering behavior, and alter the appearance of the UI.
+It'll also let you change fonts, modify font rendering behavior, and alter the appearance of the UI.
 
-## Install Tilix
+
+## Fonts
+
+### Install Fonts from Fedora packages
+
+Some Google fonts, like Inter, are available in the Fedora repositories:
+
+```bash
+sudo dnf install google-inter-fonts -y
+```
+
+### Install Fonts from Google Fonts
+
+If fonts are not available via Fedora repositories:
+
+1. Download the font from Google fonts as a ZIP file to `~/Downloads`
+1. Extract: 
+
+```bash
+unzip Inter.zip
+```
+
+3. Install per-user: 
+
+```bash
+mkdir -p ~/.local/share/fonts/inter
+cp Inter/*.ttf ~/.local/share/fonts/inter/
+fc-cache -f -v
+```
+
+
+### Install Microsoft-equivalent fonts
+
+Google created open source, metric-compatible replacements for the main Microsoft fonts:
+
+| Microsoft Font  | Open Replacement |
+| --------------- | ---------------- |
+| Arial           | Arimo            |
+| Times New Roman | Tinos            |
+| Courier New     | Cousine          |
+| Calibri         | Carlito          |
+
+These are metrically compatible, meaning, documents won't reflow, layout remains identical, and line wrapping stays consistent.
+
+Run this command to install them:
+
+```bash
+sudo dnf install google-arimo-fonts google-tinos-fonts google-cousine-fonts google-carlito-fonts -y
+```
+
+## 🛠 Install Apps for Software Development (IDEs, terminals, etc.)
+
+### 1) Tilix
 
 Tilix may be preferable to the default Gnome terminal:
 
@@ -76,7 +286,7 @@ Tilix may be preferable to the default Gnome terminal:
 sudo dnf install tilix
 ```
 
-## Z Shell (ZSH)
+### 2) Z Shell (ZSH)
 
 **Instructions derived from https://github.com/ohmyzsh/ohmyzsh/wiki/Installing-ZSH on 2024-09-02**
 
@@ -96,7 +306,12 @@ chsh -s $(which zsh)
 
 Start a new session. ZSH is now your default shell.
 
-### Optional: Install Oh-My-ZSH for ZSH configuration management
+
+<details>
+  <summary><b>Click to expand:</b> Installing Oh-My-ZSH for ZSH config management and ZSH customzation</summary>
+&nbsp;
+
+#### Optional: Install Oh-My-ZSH for ZSH configuration management
 [Oh-My-ZSH](https://github.com/ohmyzsh/ohmyzsh) is an excellent tool for managing your ZSH configuration. Install it using the following command:
 
 ```bash
@@ -107,7 +322,7 @@ An "Oh My Zsh!... is now installed!" message should appear in the terminal outpu
 
 > You may be prompted to set ZSH as your default shell.
 
-### Optional: Enable ZSH syntax highlighting
+#### Optional: Enable ZSH syntax highlighting
 Install syntax highlighting for ZSH by running:
 
 ```bash
@@ -120,7 +335,7 @@ Now run:
 echo "source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" >> ~/.zshrc
 ```
 
-### Optional: Change ZSH theme using Oh-My-ZSH
+#### Optional: Change ZSH theme using Oh-My-ZSH
 
 Oh-My-ZSH is installed with [several themes](https://github.com/ohmyzsh/ohmyzsh/wiki/Themes). Let's change the default theme to `blinks` by first opening the `.zshrc` file:
 
@@ -130,7 +345,7 @@ sudo nano ~/.zshrc
 
 Find the line `ZSH_THEME="robbyrussell"` and change it to `ZSH_THEME="blinks"` and save. The new theme will be applied to new terminal windows.
 
-### Optional: Enable ZSH plugins
+#### Optional: Enable ZSH plugins
 
 Plugins add functionality to ZSH. Let's enable some [pre-installed plugins](https://github.com/ohmyzsh/ohmyzsh/wiki/Plugins) for a few programming languages. First, open the `.zshrc` file:
 
@@ -146,20 +361,12 @@ plugins=(git dotnet rust golang mvn npm terraform aws gradle)
 
 Save the file. The plugins will be applied to new terminal windows.
 
-## Increase the inotify watch count
+</details>
 
-When working with certain development tools, you may run into the following error: "User limit of inotify watches reached". The default limit for file watchers is 735,530. Increase this limit to something more reasonable:
 
-1. Run `sudo nano /etc/sysctl.conf`
-1. Add `fs.inotify.max_user_watches=10000000` to the bottom of the file
-1. Add `fs.inotify.max_user_instances = 256` to the bottom of the file
-1. Run `sudo sysctl -p` (or restart the OS)
+### 3) Zed
 
-Increasing the max user instances from 128 to 256 can also help with development debugging experiences.
-
-## Install Zed
-
-**The instructions for installing Zed are derived from https://zed.dev/docs/linux and are current as of 2025-12-25**
+**The instructions for installing Zed are derived from https://zed.dev/docs/linux and are current as of 2026-02-20**
 
 Zed is a highly-efficient, cross-platform code editor written in Rust.
 
@@ -175,7 +382,7 @@ To run Zed after installation, run:
 zed
 ```
 
-### Zed from Flathub
+#### Alternative: Install Zed from Flathub
 
 You can alternatively install Zed as a Flatpak: https://flathub.org/en/apps/dev.zed.Zed
 
@@ -189,73 +396,73 @@ And then run it as such:
 flatpak run dev.zed.Zed
 ```
 
-## Obsidian
+<details>
+  <summary><b>Click to expand:</b> 🛡 Zed post-installation security-hardening guide (if installed as a Flatpak app)</summary>
+&nbsp;
 
-We'll install the Flatpak version of Obsidian. See https://flathub.org/en/apps/md.obsidian.Obsidian.
 
-```bash
-flatpak install flathub md.obsidian.Obsidian
-```
-
-If you're unconcerned with security-hardening Obsidian then feel free to skip the following hardening steps. Otherwise, let's start the hardening process by baselining the default permissions:
+The following commands will tighten the security boundary around Zed:
 
 ```bash
-flatpak info --show-permissions md.obsidian.Obsidian
+# Allow Zed to access development directories. This assumes ~/dev; change as needed for your system
+flatpak override --user --filesystem=~/dev dev.zed.Zed
+
+# Prevent Zed from broadly accessing $HOME and specific sensitive directories
+flatpak override --user --nofilesystem=home dev.zed.Zed
+flatpak override --user --nofilesystem=~/.ssh dev.zed.Zed
+flatpak override --user --nofilesystem=~/.aws dev.zed.Zed
+flatpak override --user --nofilesystem=~/.gnupg dev.zed.Zed
+
+# Prevent Zed from accessing SSH keys; note, this might break some workflows
+flatpak override --user --nosocket=ssh-auth dev.zed.Zed
+
+# Prevent Zed from accessing the network, *if really paranoid* or using AI-heavy workflows
+# flatpak override --user --unshare=network dev.zed.Zed
+
+# Give Zed just dri device access, which ensures it uses the GPU for Vulkan rendering
+flatpak override --user --nodevice=all dev.zed.Zed
+flatpak override --user --device=dri dev.zed.Zed
+
+# Prevent Zed from accessing session bus
+flatpak override --user --no-talk-name=org.freedesktop.Flatpak dev.zed.Zed
+
+# Block the background "bus" communication often used for spying
+flatpak override --user --nosocket=session-bus dev.zed.Zed
+
+# Clear potentially dangerous ENV vars
+flatpak override --user \
+  --unset-env=SSH_AUTH_SOCK \
+  --unset-env=AWS_PROFILE \
+  --unset-env=AWS_ACCESS_KEY_ID \
+  --unset-env=AWS_SECRET_ACCESS_KEY \
+  dev.zed.Zed
+
+# Remove X11. We're on Wayland, X11 is nothing but a security hazard
+flatpak override --user --nosocket=x11 dev.zed.Zed
+
+# Explicitly enable Wayland:
+flatpak override --user --socket=wayland dev.zed.Zed
 ```
 
-Optionally, lock down network access:
+Zed's terminal will feel broken after running these commands. That's because we'll have prevented Zed from communicating with toolchains on the host system. You will need to install the necessary SDKs via Flatpak to make the editor functional again.
+
+Verify overrides:
 
 ```bash
-flatpak override --user md.obsidian.Obsidian --unshare=network
+flatpak override --user --show dev.zed.Zed
 ```
 
-You can also restrict Obsidian from accessing `$HOME`, though we will allow access to specific subfolders in `$HOME` in the next step. The intent is to stop Obsidian from reading sensitive folders in `$HOME` like `~/.ssh`, your financial information, confidential company data, and so on.
+The `--show` flag means the command's output will display the diff between the app's default settings and your custom rules.
+
+To see the final, combined permission set (defaults + your overrides), use:
 
 ```bash
-flatpak override --user md.obsidian.Obsidian --nofilesystem=home
+flatpak info --show-permissions dev.zed.Zed
 ```
 
-Below shows how you can whitelist a specific folder in `$HOME` that Obsidian can access. You should replace `Documents/Obsidian` with the folder(s) of your choice. If you want to give Obsidian read-only access to a folder, use `:ro` instead of `:rw`.
+</details>
 
-```bash
-flatpak override --user md.obsidian.Obsidian \
-  --filesystem=$HOME/Documents/Obsidian:rw
-```
-
-We can safely disable communications that it doesn't need access to. Note, if you want notifications from Obsidian, consider deleting that line below.
-
-```bash
-flatpak override --user md.obsidian.Obsidian \
-  --nodevice=all \
-  --no-talk-name=org.freedesktop.secrets \
-  --no-talk-name=org.freedesktop.Notifications
-```
-
-Let's explicitly allow only safe portals:
-
-```bash
-flatpak override --user md.obsidian.Obsidian \
-  --talk-name=org.freedesktop.portal.FileChooser
-```
-
-This allows manual "Open file" dialogs but only when you explicitly choose files. Background scanning is thus not possible.
-
-Let's remove some other stuff it doesn't need:
-
-```bash
-flatpak override --user md.obsidian.Obsidian \
-  --nosocket=ssh-auth \
-  --nofilesystem=xdg-run/gnupg \
-  --nofilesystem=/mnt \
-  --nofilesystem=/media \
-  --nofilesystem=/run/media \
-  --nofilesystem=xdg-run/app/com.discordapp.Discord
-```
-
-Done.
-
-
-## Install Visual Studio Code
+### 4) Visual Studio Code
 
 **The instructions for installing Visual Studio Code are derived from https://code.visualstudio.com/docs/setup/linux and are current as of 2025-11-09**
 
@@ -318,7 +525,7 @@ There are some excellent dark theme alternatives to the VS Code default theme:
 1. [Arc Darker](https://marketplace.visualstudio.com/items?itemName=alvesvaren.arc-dark)
 1. [Neon City](https://marketplace.visualstudio.com/items?itemName=lakshits11.neon-city)
 
-### Working with VSCode extensions from the terminal
+#### Working with VSCode extensions from the terminal
 
 To see which VSCode extensions are installed:
 
@@ -340,7 +547,7 @@ code --install-extension ms-kubernetes-tools.vscode-kubernetes-tools
 code --install-extension redhat.vscode-yaml
 ```
 
-## Install JetBrains products (Rider, GoLand, IntelliJ IDEA Ultimate, etc)
+### 5) JetBrains products (Rider, GoLand, IntelliJ IDEA Ultimate, etc)
 
 **The instructions for installing JetBrains products are derived from https://www.jetbrains.com/help/idea/installation-guide.html#toolbox and are current as of 2024-10-08**
 
@@ -356,7 +563,7 @@ tar -xzf jetbrains-toolbox-<build>.tar.gz && cd jetbrains-toolbox-<build> && ./j
 
 If you want to use remote build/execution environments with your JetBrains products instead of doing that on your Fedora 43 workstation, see [the remote code execution guide](remote-execution.md). This guide walks you through setting a Fedora Server VM on your system that will have your build tools; you'll connect to that VM through JetBrains IDEs via SSH. (This can also apply if you have another physical machine on your network that acts as a remote build machine.)
 
-## Install Postman
+### 6) Postman
 
 Postman is a complete toolchain for API developers.
 
@@ -364,7 +571,349 @@ Postman is a complete toolchain for API developers.
 flatpak install flathub com.getpostman.Postman
 ```
 
-## Git configuration
+
+<details>
+  <summary><b>Click to expand:</b> 🛡 Postman post-installation security-hardening guide</summary>
+&nbsp;
+
+The following commands will tighten the security boundary around Postman:
+
+```bash
+# Create a workspace folder for Postman projects
+mkdir -p ~/dev/apis
+
+# Allow Postman to access the workspace
+flatpak override --user --filesystem=~/dev/apis com.getpostman.Postman
+
+# Prevent Postman from accessing $HOME
+flatpak override --user --nofilesystem=home com.getpostman.Postman
+
+# Prevent Postman from accessing SSH and AWS directories
+flatpak override --user --nofilesystem=~/.ssh com.getpostman.Postman
+flatpak override --user --nofilesystem=~/.aws com.getpostman.Postman
+flatpak override --user --nofilesystem=~/.gnupg com.getpostman.Postman
+
+# Prevent Postman from accessing USB devices
+flatpak override --user --nodevice=all com.getpostman.Postman
+
+# Prevent Postman from reading your GitHub SSH keys
+flatpak override --user --nosocket=ssh-auth com.getpostman.Postman
+
+# Prevent Postman from playing sounds
+flatpak override --user --nosocket=pulseaudio com.getpostman.Postman
+
+# Remove X11. We're on Wayland, X11 is nothing but a security hazard
+flatpak override --user --nosocket=x11 com.getpostman.Postman
+
+# Explicitly enable Wayland:
+flatpak override --user --socket=wayland com.getpostman.Postman
+```
+
+Verify permissions:
+
+```bash
+flatpak info --show-permissions com.getpostman.Postman
+```
+
+We should see something like:
+
+```ini
+[Context]
+shared=network;ipc;
+sockets=wayland;
+devices=dri;
+filesystems=xdg-config/gtk-4.0:ro;~/dev/apis;
+
+[Session Bus Policy]
+com.canonical.AppMenu.Registrar=talk
+```
+
+</details>
+
+### 7) Bruno
+
+Bruno is an alternative to Postman for API development.
+
+```bash
+flatpak install flathub com.usebruno.Bruno
+```
+
+<details>
+  <summary><b>Click to expand:</b> 🛡 Bruno post-installation security-hardening guide</summary>
+&nbsp;
+
+The following commands will tighten the security boundary around Bruno:
+
+```bash
+# Create a workspace folder for API projects
+mkdir -p ~/dev/apis
+
+# Allow to access the workspace
+flatpak override --user --filesystem=~/dev/apis com.usebruno.Bruno
+
+# Prevent accessing $HOME
+flatpak override --user --nofilesystem=home com.usebruno.Bruno
+
+# Prevent accessing SSH and AWS directories
+flatpak override --user --nofilesystem=~/.ssh com.usebruno.Bruno
+flatpak override --user --nofilesystem=~/.aws com.usebruno.Bruno
+flatpak override --user --nofilesystem=~/.gnupg com.usebruno.Bruno
+
+# Prevent accessing USB devices
+flatpak override --user --nodevice=all com.usebruno.Bruno
+
+# Re-enable GPU for smooth UI
+flatpak override --user --device=dri com.usebruno.Bruno 
+
+# Prevent reading your GitHub SSH keys
+flatpak override --user --nosocket=ssh-auth com.usebruno.Bruno
+
+# Prevent playing sounds
+flatpak override --user --nosocket=pulseaudio com.usebruno.Bruno
+
+# Remove X11. We're on Wayland, X11 is nothing but a security hazard
+flatpak override --user --nosocket=x11 com.usebruno.Bruno
+
+# Explicitly enable Wayland:
+flatpak override --user --socket=wayland com.usebruno.Bruno
+
+# Give the Electron runtime the right hint to use Wayland
+flatpak override --user --env=ELECTRON_OZONE_PLATFORM_HINT=auto com.usebruno.Bruno
+```
+
+You can further lock down Bruno by preventing it from talking to other running apps and services. However, _these commands may break some Bruno functionality_. Use care.
+
+```bash
+# Prevent all communication on the Session Bus
+flatpak override --user --nosocket=session-bus com.usebruno.Bruno
+
+# Prevent all communication on the System Bus
+flatpak override --user --nosocket=system-bus com.usebruno.Bruno
+```
+
+Verify your overrides:
+
+```bash
+flatpak override --user --show com.usebruno.Bruno
+```
+
+This shows only the diff between the app's default settings and your custom rules.
+
+To see the final, combined permission set (defaults + your overrides), use:
+
+```bash
+flatpak info --show-permissions com.usebruno.Bruno
+```
+
+</details>
+
+
+## Productivity Software
+
+### 1) Only Office
+
+A good alternative to LibreOffice with better support for Microsoft formats.
+
+```bash
+flatpak install flathub org.onlyoffice.desktopeditors
+```
+
+<details>
+  <summary><b>Click to expand:</b> 🛡 OnlyOffice post-installation security-hardening guide</summary>
+&nbsp;
+
+#### 1) Generate Baseline Config
+
+Run the app once to generate the sandbox config:
+
+```bash
+flatpak run org.onlyoffice.desktopeditors
+```
+
+Immediately close it. We'll start lockdown procedures next.
+
+What you restrict is up to you and depends on what needs you have. We'll restrict things that are unlikely to be needed for most users:
+
+- Full home directory access
+- Network access (unless you use cloud features)
+- Webcam and microphone
+- Background services
+
+#### 2) Inspect current config
+
+```bash
+flatpak info --show-permissions org.onlyoffice.desktopeditors
+```
+
+This gives you a ground truth to return to later before changing anything.
+
+#### 3) Lock it down (CLI-only, no Flatseal)
+
+**A. Remove broad filesystem access**
+
+By default, many apps get `home` access. Yank it:
+
+```bash
+flatpak override --user --nofilesystem=home org.onlyoffice.desktopeditors
+```
+
+Explicitly allow only a documents subdirectory:
+
+```bash
+flatpak override --user --filesystem=/home/user/Documents/Office:rw org.onlyoffice.desktopeditors
+```
+
+> ⚠️ Replace `user` in the command above with your username.
+
+**B. Kill network access (recommended unless you use cloud features)**
+
+```bash
+flatpak override --user --unshare=network org.onlyoffice.desktopeditors
+```
+
+Doing this:
+- Prevents telemetry
+- Blocks document exfiltration
+- Breaks 'sign into cloud' features by design
+
+You can always re-enable it later.
+
+**C. Remove device access (camera, mic, USB, etc.)**
+
+```bash
+flatpak override --user --nodevice=all org.onlyoffice.desktopeditors
+```
+
+**D. Lock down IPC & portals (safe defaults)**
+
+```bash
+flatpak override --user --no-talk-name=org.freedesktop.secrets org.onlyoffice.desktopeditors
+```
+
+OnlyOffice does not need GNOME keyring unless you’re using cloud auth.
+
+***E. Optional: restrict printing**
+
+```bash
+flatpak override --user --no-talk-name=org.freedesktop.portal.Print org.onlyoffice.desktopeditors
+```
+
+Only do this if you don't plan on printing. However, you can always undo.
+
+#### 4) Verify lockdown succeeded
+
+Recheck permissions:
+
+```bash
+flatpak info --show-permissions org.onlyoffice.desktopeditors
+```
+
+And confirm network isolation:
+
+```bash
+flatpak run org.onlyoffice.desktopeditors
+```
+
+1. Try opening a document = should work
+1. Try signing into cloud = should fail (expected)
+
+This gives you:
+- 📄 Documents access only
+- 🚫 No network
+- 🚫 No devices
+- 🔒 No `$HOME` directory snooping for SSH keys or AWS creds
+
+
+</details>
+
+
+
+### 2) Obsidian
+
+We'll install the Flatpak version of Obsidian. See https://flathub.org/en/apps/md.obsidian.Obsidian.
+
+```bash
+flatpak install flathub md.obsidian.Obsidian
+```
+
+<details>
+  <summary><b>Click to expand:</b> 🛡 Obsidian post-installation security-hardening guide</summary>
+&nbsp;
+
+If you're unconcerned with security-hardening Obsidian then feel free to skip the following hardening steps. Otherwise, let's start the hardening process by baselining the default permissions:
+
+```bash
+flatpak info --show-permissions md.obsidian.Obsidian
+```
+
+Optionally, lock down network access:
+
+```bash
+flatpak override --user md.obsidian.Obsidian --unshare=network
+```
+
+You can also restrict Obsidian from accessing `$HOME`, though we will allow access to specific subfolders in `$HOME` in the next step. The intent is to stop Obsidian from reading sensitive folders in `$HOME` like `~/.ssh`, your financial information, confidential company data, and so on.
+
+```bash
+flatpak override --user md.obsidian.Obsidian --nofilesystem=home
+```
+
+Below shows how you can whitelist a specific folder in `$HOME` that Obsidian can access. You should replace `Documents/Obsidian` with the folder(s) of your choice. If you want to give Obsidian read-only access to a folder, use `:ro` instead of `:rw`.
+
+```bash
+flatpak override --user md.obsidian.Obsidian \
+  --filesystem=$HOME/Documents/Obsidian:rw
+```
+
+We can safely disable communications that it doesn't need access to. Note, if you want notifications from Obsidian, consider deleting that line below.
+
+```bash
+flatpak override --user md.obsidian.Obsidian \
+  --nodevice=all \
+  --no-talk-name=org.freedesktop.secrets \
+  --no-talk-name=org.freedesktop.Notifications
+```
+
+Let's explicitly allow only safe portals:
+
+```bash
+flatpak override --user md.obsidian.Obsidian \
+  --talk-name=org.freedesktop.portal.FileChooser
+```
+
+This allows manual "Open file" dialogs but only when you explicitly choose files. Background scanning is thus not possible.
+
+Let's remove some other stuff it doesn't need:
+
+```bash
+flatpak override --user md.obsidian.Obsidian \
+  --nosocket=ssh-auth \
+  --nofilesystem=xdg-run/gnupg \
+  --nofilesystem=/mnt \
+  --nofilesystem=/media \
+  --nofilesystem=/run/media \
+  --nofilesystem=xdg-run/app/com.discordapp.Discord
+```
+
+Done.
+
+</details>
+
+
+## 🔧 Configuration
+
+### Increase the inotify watch count
+
+When working with certain development tools, you may run into the following error: "User limit of inotify watches reached". The default limit for file watchers is 735,530. Increase this limit to something more reasonable:
+
+1. Run `sudo nano /etc/sysctl.conf`
+1. Add `fs.inotify.max_user_watches=10000000` to the bottom of the file
+1. Add `fs.inotify.max_user_instances = 256` to the bottom of the file
+1. Run `sudo sysctl -p` (or restart the OS)
+
+Increasing the max user instances from 128 to 256 can also help with development debugging experiences.
+
+### Git configuration
 
 ```bash
 git config --global user.name "Your Name"
@@ -376,7 +925,7 @@ See [Customizing Git Configuration](https://www.git-scm.com/book/en/v2/Customizi
 
 > Tip: Remember that you can include a longer commit message by using a second `-m` in your command. Example: `git commit -m "The short message, best ~50 characters" -m "The extended description that can go on however long you want."`
 
-## SSH Keys for GitHub/GitLab
+### SSH Keys for GitHub/GitLab
 
 **The instructions for generating SSH keys is derived from https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent. Instructions for adding an SSH key to GitHub is derived from https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account. Both are current as of 2024-08-29**
 
@@ -388,7 +937,7 @@ See [Customizing Git Configuration](https://www.git-scm.com/book/en/v2/Customizi
 1. Run `ssh -T git@github.com` to [verify the key is recognized and working with GitHub.com](https://help.github.com/en/github/authenticating-to-github/githubs-ssh-key-fingerprints)
 1. Run `ssh -T git@gitlab.com` to verify the key is recognized and working with GitLab
 
-## GPG Keys for Signing Commmits and Tags
+### GPG Keys for Signing Commmits and Tags
 
 **The instructions for generating GPG keys is derived from https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key. Instructions for adding a GPG key to GitHub is derived from https://docs.github.com/en/authentication/managing-commit-signature-verification/adding-a-gpg-key-to-your-github-account. Both are current as of 2024-09-12**
 
@@ -409,8 +958,9 @@ gpg --list-secret-keys --keyid-format=long
 1. Copy your GPG key, beginning with `-----BEGIN PGP PUBLIC KEY BLOCK-----` and ending with `-----END PGP PUBLIC KEY BLOCK-----`.
 1. Add the GPG key to your GitHub account.
 
+## 🏗 Install Programming Languages and Toolchains
 
-## Java
+### 1) Java
 
 Java is already installed by default on Fedora Workstation. To verify:
 
@@ -422,7 +972,7 @@ Look for an `openjdk version` message to verify success.
 
 See https://docs.fedoraproject.org/en-US/quick-docs/installing-java/ for installing different versions of Java.
 
-## NodeJS
+### 2) NodeJS
 
 ```bash
 sudo dnf install nodejs
@@ -442,7 +992,7 @@ v22.11.0
 10.9.0
 ```
 
-## TypeScript
+### 3) TypeScript
 
 Once you've installed **NodeJS** using the commands from the prior section, you can install TypeScript into a specific project.
 
@@ -472,8 +1022,11 @@ node app.js
 
 Look for `Hello, world!` in the terminal output to verify success. If all of the above steps work without producing errors, then TypeScript is successfully installed _at the project level_ in your `typescript-test` folder.
 
+<details>
+  <summary><b>Click to expand:</b> TypeScript project creation and TypeScript configuration sections</summary>
+&nbsp;
 
-### Project creation using tsc
+#### Project creation using tsc
 
 When in `typescript-test`, we can alternativey run:
 
@@ -483,7 +1036,7 @@ npx tsc --init
 
 This command creates a `tsconfig.json` file with `strict` mode turned on by default, which is recommended for new TypeScript projects.
 
-### TypeScript configuration
+#### TypeScript configuration
 
 Remember that `tsconfig.ts` controls important behaviors of TypeScript. Some settings might be desirable for new TypeScript projects:
 
@@ -520,7 +1073,7 @@ if (element) {
 
 > It's recommended to create new projects with `npx tsc --init` which sets the `strict` flag to `true` by default.
 
-### TypeScript debugging in VSCode
+#### TypeScript debugging in VSCode
 
 To debug TS in VSCode, edit your `tsconfig.json` and ensure `sourceMap` is set to `true`:
 
@@ -544,8 +1097,9 @@ Notice there's an `app.js.map` file in addition to `app.js`.
 
 In Visual Studio Code, open the **Run and Debug** pane, set a breakpoint in `app.ts`, and then select **Run and Debug** on the left side of the window. The breakpoint is hit successfully.
 
+</details>
 
-## .NET
+### 4) .NET
 
 ```bash
 sudo dnf install dotnet-sdk-10.0
@@ -564,7 +1118,7 @@ Opt out of .NET's telemetry:
 1. Save and exit
 1. Log out and log in again
 
-## Go
+### 5) Go
 
 **Instructions for installing Go taken from https://go.dev/doc/install on 2024-08-30**
 
@@ -609,7 +1163,7 @@ source ~/.profile
 
 Now run `go version` and you should see the expected version number output to the terminal.
 
-## Terraform
+### 6) Terraform
 
 **Instructions for installing Terraform taken from https://developer.hashicorp.com/terraform/install on 2025-11-09**
 
@@ -622,7 +1176,44 @@ sudo dnf -y install terraform
 
 Run `terraform --version` to verify the installation was a success.
 
-## Podman
+### 7) Helm
+
+If you followed along with the Podman Desktop installation instructions, you now have a Kubernetes Cluster (via Kind) and `kubectl` installed. Let's now install Helm.
+
+```bash
+sudo dnf install helm
+```
+
+Run `helm version` to verify success.
+
+### 8) AWS CLI Tools
+
+Fedora has a package for AWS CLI tooling:
+
+```bash
+sudo dnf install awscli
+```
+
+Run `aws --version` to verify success.
+
+### 9) Azure CLI tools
+
+The simplest way to install the [Azure CLI](https://packages.fedoraproject.org/pkgs/azure-cli/azure-cli/) tools:
+
+```bash
+sudo dnf install azure-cli
+```
+
+Verify success by running `az --version`. Note that installing via `dnf` will install an older version of the Azure CLI tools.
+
+You cannot run `az upgrade` to upgrade the Azure CLI tools when they were installed using `dnf`.
+
+> 📚 See [Install Azure CLI on Linux](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-linux?pivots=dnf) for alternative installation methods that will ensure newer versions are installed.
+
+
+## Containers
+
+### Podman
 
 **Instructions for installing Podman taken from https://podman.io/docs/installation on 2024-09-02**
 
@@ -638,8 +1229,6 @@ If for some reason you don't have Podman installed you can install it using this
 sudo dnf -y install podman
 ```
 
-## Podman Desktop
-
 ![Podman Desktop](<./images/podman01.png>)
 
 Podman Desktop is an open source graphical tool for managing containers locally, much like Docker Desktop. To install:
@@ -650,7 +1239,123 @@ flatpak install flathub io.podman_desktop.PodmanDesktop
 
 You'll be asked to go through a setup process when running Podman Desktop for the first time. Check all 3 boxes. This will install Podman Compose and `kubectl` system-wide.
 
-## Install Kind and Configure with Podman Desktop
+<details>
+  <summary><b>Click to expand:</b> 🛡 Podman Desktop post-installation security-hardening guide</summary>
+&nbsp;
+
+Keep Podman in **rootless** mode. Verify:
+
+```bash
+podman info | grep rootless
+```
+
+Look for:
+
+```
+rootless: true
+```
+
+Rootless prevents:
+- Kernel device access
+- Direct system mounts
+- Privileged escalation
+- Persistence outside user namespace
+
+Let's add Flatpak restrictions:
+
+```bash
+# Remove Full Filesystem Access
+flatpak override --nofilesystem=host io.podman_desktop.PodmanDesktop
+
+# Allow specific folders only
+flatpak override \
+  --filesystem=~/dev \
+  io.podman_desktop.PodmanDesktop
+
+# For air-gapped builds only
+# flatpak override --unshare=network io.podman_desktop.PodmanDesktop
+```
+
+Let's edit the trust requirements for container images when they are pulled from a registry:
+
+```bash
+sudo nano /etc/containers/policy.json
+```
+
+Set to:
+
+```json
+{
+  "default": [{ "type": "reject" }],
+  "transports": {
+    "docker": {
+      "quay.io": [{ "type": "insecureAcceptAnything" }],
+      "ghcr.io": [{ "type": "insecureAcceptAnything" }],
+      "registry.fedoraproject.org": [{ "type": "insecureAcceptAnything" }],
+      "mcr.microsoft.com": [{ "type": "insecureAcceptAnything" }]
+    }
+  }
+}
+```
+
+This gives:
+- Registry allowlist
+- No typosquatting
+- No silent Docker Hub
+- Predictable behavior
+- Minimal friction
+
+> To change from `insecureAcceptAnything` to `signedBy` we'd need key management, which adds friction and may not be worth it on a _developer_ workstation. 
+
+Then explicitly trust specific registries. Let's do that next:
+
+```bash
+sudo nano /etc/containers/registries.conf
+```
+
+Find:
+
+```
+unqualified-search-registries = ["registry.fedoraproject.org", "quay.io", "docker.io"]
+```
+
+Change to:
+
+```
+unqualified-search-registries = ["registry.fedoraproject.org", "quay.io", "ghcr.io"]
+```
+
+Notice the removal of `docker.io`. Now if you do a `podman pull nginx` it won't silently default or fall back to Docker Hub.
+
+Next, add this:
+
+```
+[[registry]]
+location = "quay.io"
+insecure = false
+blocked = false
+
+[[registry]]
+location = "ghcr.io"
+insecure = false
+blocked = false
+
+[[registry]]
+location = "registry.fedoraproject.org"
+insecure = false
+blocked = false
+
+[[registry]]
+location = "docker.io"
+blocked = true
+```
+
+Now docker.io is explicitly blocked.
+
+</details>
+
+
+### Install Kind and Configure with Podman Desktop
 
 In Podman Desktop, find the "Kind" button on the bottom left of the window and select it. A prompt should appear asking if you want to install Kind. Select Yes. Once completed, open a terminal and run the following command to confirm:
 
@@ -692,7 +1397,7 @@ kubectl config current-context
 
 Observe `kind-kind-cluster` as the output.
 
-## Running common containers
+### Running common containers
 
 Let's run a Promethus container. We need to use `9091` on the host becase `kind` uses `9090` already.
 
@@ -701,17 +1406,60 @@ podman pull quay.io/prometheus/prometheus
 podman run -d -p 9091:9090 quay.io/prometheus/prometheus
 ```
 
-## Helm
+### Dev Containers
 
-If you followed along with the Podman Desktop installation instructions, you now have a Kubernetes Cluster (via Kind) and `kubectl` installed. Let's now install Helm.
+Dev Containers are a way to containerize your development environment. They make your development setup portable and consistent.
 
-```bash
-sudo dnf install helm
+However, one thing we must do is configure the Dev Containers VSCode extension to use Podman instead of Docker. This is because the Dev Containers extension assumes you have Docker, but the Fedora Setup guide is using Podman instead. If you've followed along with this guide, how would you go about configuring this?
+
+1. First, get the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension for Visual Studio Code.
+
+1. Open **File** > **Preferences** > **Settings** in Visual Studio Code.
+
+1. Type "Dev Containers" into the **Settings** search box.
+
+1. Change **Dev > Containers: Docker Compose Path** to `podman compose`
+
+1. Change **Dev > Containers: Docker Path** to `podman`
+
+1. Change **Dev > Containers: Docker Socket Path** to `unix:///run/user/1000/podman/podman.sock`.
+
+This is also a good time to update your Docker VSCode extension settings to work with Podman:
+
+7. Type "Docker" into the **Settings** search box.
+
+8. Change **Docker: Docker Path** to `podman`.
+
+9. Change **Docker: Docker Compose Path** to `podman compose`.
+
+10. Add a new environment variable to **Docker: Environment** with item = `DOCKER_HOST` and value = `unix:///run/user/1000/podman/podman.sock`.
+
+Now let's look at an example `devcontainer.json` file that might appear in a repository:
+
+```json
+{
+	"name": "name here",
+	"image": "path-to-image-here",
+	"containerUser": "vscode",
+	"updateRemoteUserUID": true,
+	"containerEnv": {
+		"HOME": "/home/vscode"
+	},
+	"runArgs": [
+		"--userns=keep-id:uid=1000,gid=1000"
+	]
+}
 ```
 
-Run `helm version` to verify success.
+Setting `containerUser` to "vscode" ensures that the container uses the `vscode` user to create workspaces. Otherwise, the container might try to create workspaces under `/root`, which will fail in Podman.
 
-## Unity 6 Game Editor
+This ensures that the `vscode` user is really mapped inside of the container, and it also ensures that `vscode`'s HOME is set explicitly.
+
+> You may still run into trouble with DevContainers using these steps above. Most DevContainer examples assume you're running rootful containers under Docker and _not_ rootless containers in Podman.
+
+## 🎮 Game Development
+
+### Unity 6 Game Editor
 
 **Instructions for installing Unity Hub taken from https://docs.unity3d.com/hub/manual/InstallHub.html#install-hub-linux on 2024-11-24**
 
@@ -734,7 +1482,7 @@ In the **Unity Hub**, be sure to navigate to **Preferences** > **Privacy** and o
 
 > Removing Unity Hub can be done by running `$ sudo yum remove unityhub`
 
-### Fixing SHA1-related license issues in Unity Hub
+#### Fixing SHA1-related license issues in Unity Hub
 
 **Instructions taken from https://discussions.unity.com/t/can-not-activate-license-in-unity-hub-on-fedora-41-rhel9-until-trust-sha-1/1520652/17 on 2024-12-01**
 
@@ -758,7 +1506,7 @@ OPENSSL_CONF=~/my-insecure-unity-opensslcnf.config unityhub
 
 This section will be updated if and when Unity adopts an algorithm that no longer runs afoul of Fedora's default crypto policies.
 
-## Blender
+### Blender
 
 If we're installing Unity, we probably want Blender, too. 
 
@@ -767,6 +1515,11 @@ flatpak install flathub org.blender.Blender
 ```
 
 > For Blender, prefer Flathub over Fedora’s Flatpak remote. Fedora’s Flatpak registry is philosophically aligned with Fedora, but Flathub is materially better for Blender in terms of version freshness, completeness, and real-world usability.
+
+<details>
+  <summary><b>Click to expand:</b> 🛡 Blender post-installation security-hardening guide</summary>
+&nbsp;
+
 
 Let's get a security baseline on Blender:
 
@@ -838,34 +1591,10 @@ Let's do a final audit:
 flatpak info --show-permissions org.blender.Blender
 ```
 
+</details>
 
-## AWS CLI Tools
-
-Fedora has a package for AWS CLI tooling:
-
-```bash
-sudo dnf install awscli
-```
-
-Run `aws --version` to verify success.
-
-## Azure CLI tools
-
-The simplest way to install the [Azure CLI](https://packages.fedoraproject.org/pkgs/azure-cli/azure-cli/) tools:
-
-```bash
-sudo dnf install azure-cli
-```
-
-Verify success by running `az --version`. Note that installing via `dnf` will install an older version of the Azure CLI tools.
-
-You cannot run `az upgrade` to upgrade the Azure CLI tools when they were installed using `dnf`.
-
-See [Install Azure CLI on Linux](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-linux?pivots=dnf) for alternative installation methods that will ensure newer versions are installed.
-
-
-
-## Set up and connect to a Microsoft SQL Server
+## ▶ Quick Start Guides for Common Scenarios
+### 1) Set up and connect to a Microsoft SQL Server
 
 Microsoft SQL Server (MSSQL) can be run in a container instead of installing it locally. We can also start a second container to connect to the first container and run commands.
 
@@ -918,48 +1647,14 @@ Microsoft SQL Server 2022 (RTM-CU17) (KB5048038) - 16.0.4175.1 (X64)
 
 5. Use `EXIT` or `QUIT` to terminate the session, which also terminates the 2nd container entirely. You'll still need to tear down the first container.
 
-### Connect to the MSSQL container from a Go program
+#### Connect to the MSSQL container from a Go program
 
 [Go MSSQL example code](./app-examples/golang-mssql/) is a runnable Go program that should "just work" if you followed the steps above.
 
 
-### Install Azure Data Studio for Microsoft SQL Server
-
-**Instructions derived from https://learn.microsoft.com/en-us/azure-data-studio/download-azure-data-studio?tabs=linux-install%2Cwin-user-install%2Credhat-install%2Cwindows-uninstall%2Credhat-uninstall#tabpanel_1_linux-install**
-
-Azure Data Studio is a cross-platform alternative to Microsoft SQL Server Management Studio (SSMS). It's absent some key features of SSMS, especially those related to database administration.
-
-![Azure Data Studio](<./images/azure-data-studio-01.png>)
-
-Flatpaks or store options to download and install Azure Data Studio are unavailable at the time of writing. We'll use Microsoft's instructions to get it running on Fedora:
-
-1. First, download the [.tar.gz](https://azuredatastudio-update.azurewebsites.net/latest/linux-x64/stable) file.
-1. Run the following commands, replacing `<version string>` and `<your username>`.
-
-```bash
-cd ~
-cp ~/Downloads/azuredatastudio-linux-<version string>.tar.gz ~
-tar -xvf ~/azuredatastudio-linux-<version string>.tar.gz
-echo 'export PATH="$PATH:/home/<your username>/azuredatastudio-linux-x64"' >> ~/.profile
-source ~/.profile
-```
-
-3. Run:
-
-```bash
-azuredatastudio
-```
-
-Or:
-
-```bash
-~/azuredatastudio-linux-x64/azuredatastudio
-```
-
-4. Turn off telemetry by navigating to **File** > **Preferences** > **Settings** and searching for "Telemetry", then disabling telemetry for all settings that appeear in the search results.
 
 
-## Set up and connect to a containerized PostgreSQL Server
+### 2) Set up and connect to a containerized PostgreSQL Server
 
 One can run PostgreSQL in a container rather than installing locally. We can also start a second PostgreSQL container to connect to the first container and run commands.
 
@@ -991,7 +1686,7 @@ After step 3, you should see a `postgres=#` prompt. Type `SELECT table_name FROM
 
 > You can always open Podman Desktop to easily delete pods and containers if you mess things up.
 
-### Connect to the PostgreSQL container from a Go program
+#### Connect to the PostgreSQL container from a Go program
 
 [Go PostgreSQL example code](./app-examples/golang-postgres/) is a runnable Go program that should "just work" if you followed the steps above.
 
@@ -1069,58 +1764,9 @@ template0
 Connected!
 ```
 
-## Dev Containers
 
-Dev Containers are a way to containerize your development environment. They make your development setup portable and consistent.
 
-However, one thing we must do is configure the Dev Containers VSCode extension to use Podman instead of Docker. This is because the Dev Containers extension assumes you have Docker, but the Fedora Setup guide is using Podman instead. If you've followed along with this guide, how would you go about configuring this?
-
-1. First, get the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension for Visual Studio Code.
-
-1. Open **File** > **Preferences** > **Settings** in Visual Studio Code.
-
-1. Type "Dev Containers" into the **Settings** search box.
-
-1. Change **Dev > Containers: Docker Compose Path** to `podman compose`
-
-1. Change **Dev > Containers: Docker Path** to `podman`
-
-1. Change **Dev > Containers: Docker Socket Path** to `unix:///run/user/1000/podman/podman.sock`.
-
-This is also a good time to update your Docker VSCode extension settings to work with Podman:
-
-7. Type "Docker" into the **Settings** search box.
-
-8. Change **Docker: Docker Path** to `podman`.
-
-9. Change **Docker: Docker Compose Path** to `podman compose`.
-
-10. Add a new environment variable to **Docker: Environment** with item = `DOCKER_HOST` and value = `unix:///run/user/1000/podman/podman.sock`.
-
-Now let's look at an example `devcontainer.json` file that might appear in a repository:
-
-```json
-{
-	"name": "name here",
-	"image": "path-to-image-here",
-	"containerUser": "vscode",
-	"updateRemoteUserUID": true,
-	"containerEnv": {
-		"HOME": "/home/vscode"
-	},
-	"runArgs": [
-		"--userns=keep-id:uid=1000,gid=1000"
-	]
-}
-```
-
-Setting `containerUser` to "vscode" ensures that the container uses the `vscode` user to create workspaces. Otherwise, the container might try to create workspaces under `/root`, which will fail in Podman.
-
-This ensures that the `vscode` user is really mapped inside of the container, and it also ensures that `vscode`'s HOME is set explicitly.
-
-> You may still run into trouble with DevContainers using these steps above. Most DevContainer examples assume you're running rootful containers under Docker and _not_ rootless containers in Podman.
-
-## KVM + QEMU + VirtManager
+## Virtual Machines: KVM + QEMU + VirtManager
 
 **Instructions derived from https://docs.fedoraproject.org/en-US/quick-docs/virtualization-getting-started/ and https://fedoramagazine.org/full-virtualization-system-on-fedora-workstation-30/**
 
@@ -1199,11 +1845,21 @@ It's important to ensure that the Windows 11 VM properties are set to use `QXL` 
 
 ![Windows 11 VM properties in QEMU/KVM showing the "QXL" Video setting needed to ensure Spice Guest Tools work as intended.](images/qemu-kvm-win11-video-properties-01.png)
 
-## Install Firefox
+## 🌍 Firefox
 
-For security purposes, it's better to run Firefox as a Flatpak instead of from RPM. Flatpak uses bubblewrap for namespace isolation (mount, PID, network options, etc.) and provides a strong default sandbox at low effort. 
+This section will explain common security and privacy changes to harden Firefix.
 
-First, install Firefox from Flathub:
+For security purposes, it _may_ be better to run Firefox as a Flatpak instead of from RPM, depending on your security needs. 
+
+Flatpak uses bubblewrap for namespace isolation (mount, PID, network options, etc.) and provides a strong default sandbox at low effort. You can, for example, restrict Firefox from reading `$HOME` with Flatpak permissions.
+
+However, running Firefox as a Flatpak can introduce problems with hardware acceleration and may interfere with some developer workflows. If you do decide to install and use Firefox from Flathub, see the following subsection.
+
+Skip the Flathub installation section if you want to keep using Firefox from RPM.
+
+### Flathub Installation
+
+Install Firefox from Flathub:
 
 ```bash
 flatpak install flathub org.mozilla.firefox
@@ -1260,7 +1916,7 @@ chmod +x ~/.local/bin/firefox
 
 Log out and in again. Starting Firefox from Gnome or COSMIC should start the Flathub version instead of the RPM version.
 
-## Configure Firefox
+### Configure Firefox
 
 See https://wiki.mozilla.org/Privacy/Privacy_Task_Force/firefox_about_config_privacy_tweeks for advanced privacy-related Firefox configuration options.
 
@@ -1278,7 +1934,7 @@ Attribution is a way to track whether ads served to you were effective in gettin
 privacy.resistFingerprinting = true
 ```
 
-This setting improves your defenses against [browser fingerprinting](https://coveryourtracks.eff.org/learn).
+This setting improves your defenses against [browser fingerprinting](https://coveryourtracks.eff.org/learn). However, it may also break certain site layouts.
 
 ```
 dom.event.clipboardevents.enabled = false
@@ -1290,7 +1946,39 @@ This setting prevents websites from knowing if you used copy or paste commands a
 webgl.disabled = true
 ```
 
-This command disables WebGL. If you never visit sites with WebGL content then it can be safely disabled.
+If you never visit sites with WebGL content then it can be safely disabled. However, disabling WebGL can break some Unity development workflows.
+
+### Set a `user.js` file in your profile directory
+
+To avoid setting and re-setting stuff in `about:config` on every fresh install, you can instead drop a `user.js` file into your profile directory. The `user.js` file will look something like this:
+
+```js
+user_pref("privacy.resistFingerprinting", true);
+user_pref("privacy.query_stripping.enabled", true);
+user_pref("dom.security.https_only_mode", true);
+```
+
+[View a complete user.js designed for developer workstations](/examples/firefox-profile-developer/user.js).
+
+> ⚠️ Values in `user.js` override changes you make to `about:config`, not the other way around.
+
+Place `user.js` files into Firefox profile folders:
+
+```
+~/.mozilla/firefox/<profile-folder>/user.js
+```
+
+### Use different Firefox profiles
+
+You can use different Firefox profiles depending on role. For development, you can create a `user-dev` profile which has some relaxed security/privacy settings for OAuth2 flows, and a `user-browse` profile for when you want stricter privacy and security.
+
+To manage profiles, run:
+
+```bash
+firefox --ProfileManager
+```
+
+Each profile gets its own directory in `~/.mozilla/firefox/` and can therefore have its own `user.js` file.
 
 ## Thunderbird
 
@@ -1306,7 +1994,11 @@ Now let's install the [Flatpak](https://flathub.org/en/apps/org.mozilla.Thunderb
 flatpak install flathub org.mozilla.Thunderbird
 ```
 
-### Set Thunderbird Flathub Permissions
+<details>
+  <summary><b>Click to expand:</b> 🛡 Thunderbird post-installation security-hardening guide</summary>
+&nbsp;
+
+### Set Thunderbird Flatpak Permissions
 
 Let's get a baseline of what our permissions are:
 
@@ -1392,6 +2084,8 @@ shared=network;
 sockets=!x11;!pulseaudio;!fallback-x11;!cups;
 ```
 
+</details>
+
 ### Thunderbird Security/Privacy Settings
 
 Navigate to **Settings** > **Privacy & Security** and:
@@ -1440,7 +2134,7 @@ Open attachments **manually**, ideally after scanning them.
 A good idea is to open attachments in other Flatpak'd apps or a virtual machine.
 
 
-## Install and Configure USBGuard
+## 🔐 Install and Configure USBGuard
 
 > Enabling USBGuard in Fedora 41 may cause the OS to hard-lock on reboot or power off and prevent virtual machines from starting. This section will be updated with more details as they become available.
 
@@ -1602,37 +2296,9 @@ sudo usbguard list-devices -b
 
 If your device does not appear in the list of blocked devices then you've successfully whitelisted it.
 
-## Useful Gnome Keyboard Shortcuts
 
-Lastly, let's cover some useful keyboard shortcuts for Gnome. You can find a full list at https://help.gnome.org/users/gnome-help/stable/shell-keyboard-shortcuts.html.en, but a subset are called out here, especially for those switching from other distros or from Windows.
 
-| Key Combo       | Action                     |
-| --------------- | -------------------------- |
-| `Super` + `TAB` | Switches between windows, much like `ALT` + `TAB` in Windows. Caveat: If you have multiple windows of the same app (e.g. two Firefox windows), this key combo won't switch between them. You'll need to use the down arrow key to expand the 'Firefox' selection into its list of windows, then use the left/right arrow keys to select the window you want. |
-| `ALT` + `ESC`   | Switches between windows in the current workspace. Unlike `Super` + `TAB`, this does switch between different windows for the same app. |
- `Super` + `A`    | Shows the list of applications. |
- `Super` + `L`    | Locks the screen. Same behavior as Windows. |
- `Super` + `V`    | Shows the notification screen, including the calendar. Press again to make it disappear. |
- `ALT` + `F2`     | Run a command. |
- `ALT` + `Prnt Scrn`     | Take a screenshot of the active window. |
- `Shift` + `Prnt Scrn`   | Take a screenshot of a screen area. |
-
-## Install Fonts
-
-The easiest way to install a font is to download it, extract the contents, and then double-click on the `.ttf` file. This opens Gnome Font Viewer. In the Gnome Font Viewer window, select the blue **Install** button to install the font.
-
-Alternatively, fonts can be installed by downloading a font and placing it into a ffont family older inside of `/.local/share/fonts`.
-
-Let's walk through what this would look like. First, download the [Inter font from Google Fonts](https://fonts.google.com/specimen/Inter) to your `/Downloads` folder.
-
-```bash
-mkdir -p ~/.local/share/fonts/Inter
-cd ~/Downloads
-unzip Inter.zip -d Inter/
-cp ~/Downloads/Inter-VariableFont_opsz,wght.ttf ~/.local/share/fonts/Inter
-```
-
-## Filesystem security Hardening
+## 🛡 Filesystem security Hardening
 
 First, we will set `noexec` on `/tmp`. `/tmp` is world-writable and used by every user, service, and daemon. It's frequently used to store downloaded files, temp scripts, unpacked archives, etc. 
 
@@ -1709,3 +2375,19 @@ sudo sysctl --system
 ```
 
 This prevents local privilege escalation exploits and kernel info leaks.
+
+## Disk cleanup
+
+Perioidically clean things up to reduce disk usage:
+
+```bash
+sudo dnf clean all
+```
+
+> The `clean` command removes cached data that the package manager stores locally. This includes metadata about available software, cached packages that were downloaded but not installed, and temporary files. It can end up at several gigabytes and has no purpose. Keeping it can even expose what packages you've recently searched for or downloaded.
+
+```bash
+sudo dnf autoremove -y
+```
+
+> The `autoremove` command gets rid of packages/dependencies that are left behind when you uninstall something. These are called orphaned packages. Old kernels or large libraries can be huge, so removing these may save substantial space. Additionally, fewer packages = less attack surface since you're not keeping large, unmaintained packages on disk.
